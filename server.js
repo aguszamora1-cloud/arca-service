@@ -24,6 +24,17 @@ let authCache = {
     cuit: null
 };
 
+function dateToUtcTime(date) {
+    const pad = (n) => n.toString().padStart(2, '0');
+    const yy = date.getUTCFullYear().toString().slice(2);
+    const mm = pad(date.getUTCMonth() + 1);
+    const dd = pad(date.getUTCDate());
+    const hh = pad(date.getUTCHours());
+    const mn = pad(date.getUTCMinutes());
+    const ss = pad(date.getUTCSeconds());
+    return `${yy}${mm}${dd}${hh}${mn}${ss}Z`;
+}
+
 /**
  * Genera el CMS (PKCS#7) firmado manualmente para evitar problemas de orden en AFIP.
  * Reemplaza a forge.pkcs7.createSignedData() según requerimiento.
@@ -59,7 +70,7 @@ function createCMS(tra, certPem, keyPem) {
         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.9.5').getBytes()),
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, [
-                forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.UTCTIME, false, forge.util.dateToUtcTime(signingTime))
+                forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.UTCTIME, false, dateToUtcTime(signingTime))
             ])
         ])
     ]);
