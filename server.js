@@ -38,26 +38,24 @@ function dateToUtcTime(date) {
 function normalizePem(pem) {
     if (!pem) return '';
     
-    // Si ya tiene saltos de línea reales, está bien
-    if (pem.includes('\n')) return pem;
+    // Extraer tipo (CERTIFICATE, PRIVATE KEY, etc)
+    const typeMatch = pem.match(/-----BEGIN ([^-]+)-----/);
+    if (!typeMatch) return pem;
     
-    // Reemplazar \n escapados
-    let normalized = pem.replace(/\\n/g, '\n');
+    const type = typeMatch[1];
     
-    // Si sigue sin saltos de línea, reconstruir el PEM manualmente
-    if (!normalized.includes('\n')) {
-        // Buscar el patrón del header y footer (independiente de espacios/newslines)
-        const match = normalized.match(/-----BEGIN ([^-]+)-----([\s\S]+?)-----END ([^-]+)-----/);
-        if (match) {
-            const type = match[1];
-            const content = match[2].replace(/\s/g, '');
-            // Insertar salto de línea cada 64 caracteres
-            const wrapped = content.match(/.{1,64}/g).join('\n');
-            normalized = `-----BEGIN ${type}-----\n${wrapped}\n-----END ${type}-----\n`;
-        }
-    }
+    // Extraer todo el contenido entre los marcadores, 
+    // limpiando cualquier espacio, \n real o escapado
+    const content = pem
+        .replace(/-----BEGIN [^-]+-----/, '')
+        .replace(/-----END [^-]+-----/, '')
+        .replace(/\\n/g, '')
+        .replace(/\s/g, '');
     
-    return normalized;
+    // Reconstruir con saltos de línea reales cada 64 chars (estándar RFC)
+    const wrapped = content.match(/.{1,64}/g).join('\n');
+    
+    return `-----BEGIN ${type}-----\n${wrapped}\n-----END ${type}-----\n`;
 }
 
 /**
