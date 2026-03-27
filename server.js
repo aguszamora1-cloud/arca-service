@@ -8,6 +8,16 @@ const fs = require('fs');
 const path = require('path');
 const Afip = require('@afipsdk/afip.js');
 
+// Global handlers to prevent silent crashes
+process.on('uncaughtException', (err) => {
+    console.error('💥 UNCAUGHT EXCEPTION:', err.message);
+    console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('💥 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
+
 const app = express();
 app.use(process.env.NODE_ENV === 'production' ? cors() : cors({ origin: '*' }));
 app.use(express.json());
