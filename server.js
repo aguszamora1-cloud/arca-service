@@ -35,6 +35,31 @@ function dateToUtcTime(date) {
     return `${yy}${mm}${dd}${hh}${mn}${ss}Z`;
 }
 
+function normalizePem(pem) {
+    if (!pem) return '';
+    
+    // Si ya tiene saltos de línea reales, está bien
+    if (pem.includes('\n')) return pem;
+    
+    // Reemplazar \n escapados
+    let normalized = pem.replace(/\\n/g, '\n');
+    
+    // Si sigue sin saltos de línea, reconstruir el PEM manualmente
+    if (!normalized.includes('\n')) {
+        // Buscar el patrón del header y footer (independiente de espacios/newslines)
+        const match = normalized.match(/-----BEGIN ([^-]+)-----([\s\S]+?)-----END ([^-]+)-----/);
+        if (match) {
+            const type = match[1];
+            const content = match[2].replace(/\s/g, '');
+            // Insertar salto de línea cada 64 caracteres
+            const wrapped = content.match(/.{1,64}/g).join('\n');
+            normalized = `-----BEGIN ${type}-----\n${wrapped}\n-----END ${type}-----\n`;
+        }
+    }
+    
+    return normalized;
+}
+
 /**
  * Genera el CMS (PKCS#7) firmado manualmente para evitar problemas de orden en AFIP.
  * Reemplaza a forge.pkcs7.createSignedData() según requerimiento.
@@ -45,13 +70,11 @@ function createCMS(tra, certPem, keyPem) {
         prefix: certPem?.substring(0, 50).replace(/\n/g, ' ')
     });
 
-    // Normalización de PEM (por si se perdieron los \n en el transporte JSON)
-    const normalizedCert = certPem
-        .replace(/\\n/g, '\n')
-        .replace(/---([^-]*)---/g, (match) => match.replace(/\s+/g, '\n'));
+    const normalizedCert = normalizePem(certPem);
+    const normalizedKey = normalizePem(keyPem);
     
     const cert = forge.pki.certificateFromPem(normalizedCert);
-    const privateKey = forge.pki.privateKeyFromPem(keyPem);
+    const privateKey = forge.pki.privateKeyFromPem(normalizedKey);
 
     // 1. Digest del XML
     const md = forge.md.sha256.create();
