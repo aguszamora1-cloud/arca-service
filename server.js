@@ -19,26 +19,15 @@ app.get('/', (req, res) => res.send('ARCA Service Online 🚀'));
 
 app.post('/facturar', async (req, res) => {
     try {
-        console.log('📬 Body recibido en Railway:', JSON.stringify({
-            tieneCuit: !!req.body.cuit,
-            tieneCert: !!req.body.certificate || !!req.body.cert,
-            tieneKey: !!req.body.privateKey || !!req.body.key,
-            camposRecibidos: Object.keys(req.body)
-        }));
-
         const { 
             cuit, certificate, privateKey, production,
             tipoComprobante, ptoVta, concepto, 
-            docTipo, docNro, total, payload, credentials, cert, key 
+            docTipo, docNro, total, payload 
         } = req.body;
 
-        // Fallback para nombres de campos (el SDK puede mandar 'cert'/'key' o 'certificate'/'privateKey')
-        const finalCert = certificate || cert;
-        const finalKey = privateKey || key;
-
-        // Validacion basica
-        if (!cuit || !finalCert || !finalKey) {
-            return res.status(400).json({ success: false, error: 'Credenciales incompletas en la peticion' });
+        // Validacion basica (Nombres unificados: certificate y privateKey)
+        if (!cuit || !certificate || !privateKey) {
+            return res.status(400).json({ success: false, error: 'Credenciales incompletas (requiere cuit, certificate y privateKey)' });
         }
 
         // 1. Preparar rutas de archivos temporales para el SDK
@@ -49,9 +38,9 @@ app.post('/facturar', async (req, res) => {
 
         if (!fs.existsSync(resFolder)) fs.mkdirSync(resFolder, { recursive: true });
 
-        // Escribir credenciales a disco (el SDK de Mauro Ordoñez las lee de archivos)
-        fs.writeFileSync(certPath, finalCert);
-        fs.writeFileSync(keyPath, finalKey);
+        // Escribir credenciales a disco
+        fs.writeFileSync(certPath, certificate);
+        fs.writeFileSync(keyPath, privateKey);
 
         console.log('📄 Archivos de credenciales creados:');
         console.log('Cert file path:', certPath);
