@@ -53,16 +53,24 @@ app.post('/facturar', async (req, res) => {
         fs.writeFileSync(certPath, finalCert);
         fs.writeFileSync(keyPath, finalKey);
 
+        console.log('🛠️ Inicializando AFIP SDK con:', {
+            CUIT: cuit,
+            production: production,
+            certLength: finalCert?.length,
+            keyLength: finalKey?.length,
+            certStart: finalCert?.substring(0, 50)
+        });
+
         // 2. Inicializar SDK
         const afip = new Afip({
             CUIT: parseInt(String(cuit).replace(/-/g, '')),
-            cert: certPath,
-            key: keyPath,
+            cert: certPath,  // El SDK lee el archivo de disco
+            key: keyPath,   // El SDK lee el archivo de disco
             production: production === true,
             res_folder: resFolder
         });
 
-        console.log(`🚀 Iniciando solicitud para CUIT ${cuit} (PTO: ${ptoVta}, TIPO: ${tipoComprobante})`);
+        console.log(`🚀 Solicitud iniciada para CUIT ${cuit} (Ambiente: ${production ? 'PRODUCCION' : 'HOMOLOGACION'})`);
 
         // 3. Obtener ultimo numero autorizado
         const lastVoucher = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComprobante);
