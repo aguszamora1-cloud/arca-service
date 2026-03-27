@@ -53,24 +53,39 @@ app.post('/facturar', async (req, res) => {
         fs.writeFileSync(certPath, finalCert);
         fs.writeFileSync(keyPath, finalKey);
 
+        console.log('📄 Archivos de credenciales creados:');
+        console.log('Cert file path:', certPath);
+        console.log('Key file path:', keyPath);
+        console.log('Cert file exists:', fs.existsSync(certPath));
+        console.log('Key file exists:', fs.existsSync(keyPath));
+        console.log('CUIT usado:', cuit);
+        console.log('Production mode:', production);
+
+        // Verificación de formato PEM
+        try {
+            const certContent = fs.readFileSync(certPath, 'utf8');
+            console.log('Cert preview (100 chars):', certContent.substring(0, 100).replace(/\n/g, ' '));
+        } catch (e) {
+            console.error('Error leyendo el cert recién creado:', e.message);
+        }
+
         console.log('🛠️ Inicializando AFIP SDK con:', {
-            CUIT: cuit,
-            production: production,
-            certLength: finalCert?.length,
-            keyLength: finalKey?.length,
-            certStart: finalCert?.substring(0, 50)
+            CUIT: parseInt(String(cuit).replace(/-/g, '')),
+            cert: certPath,
+            key: keyPath,
+            production: production === true
         });
 
         // 2. Inicializar SDK
         const afip = new Afip({
             CUIT: parseInt(String(cuit).replace(/-/g, '')),
-            cert: certPath,  // El SDK lee el archivo de disco
-            key: keyPath,   // El SDK lee el archivo de disco
+            cert: certPath,
+            key: keyPath,
             production: production === true,
             res_folder: resFolder
         });
 
-        console.log(`🚀 Solicitud iniciada para CUIT ${cuit} (Ambiente: ${production ? 'PRODUCCION' : 'HOMOLOGACION'})`);
+        console.log(`🚀 Solicitud iniciada (Ambiente: ${production ? 'PRODUCCION' : 'HOMOLOGACION'})`);
 
         // 3. Obtener ultimo numero autorizado
         const lastVoucher = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComprobante);
