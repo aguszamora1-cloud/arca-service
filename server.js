@@ -40,7 +40,17 @@ function dateToUtcTime(date) {
  * Reemplaza a forge.pkcs7.createSignedData() según requerimiento.
  */
 function createCMS(tra, certPem, keyPem) {
-    const cert = forge.pki.certificateFromPem(certPem);
+    console.log('📬 Diagnosis Cert PEM:', {
+        length: certPem?.length,
+        prefix: certPem?.substring(0, 50).replace(/\n/g, ' ')
+    });
+
+    // Normalización de PEM (por si se perdieron los \n en el transporte JSON)
+    const normalizedCert = certPem
+        .replace(/\\n/g, '\n')
+        .replace(/---([^-]*)---/g, (match) => match.replace(/\s+/g, '\n'));
+    
+    const cert = forge.pki.certificateFromPem(normalizedCert);
     const privateKey = forge.pki.privateKeyFromPem(keyPem);
 
     // 1. Digest del XML
@@ -79,6 +89,11 @@ function createCMS(tra, certPem, keyPem) {
     const bytes = forge.asn1.toDer(attrs).getBytes();
     const signature = privateKey.sign(forge.md.sha256.create().update(bytes));
 
+    // Seguridad para extraer issuer y serialNumber del certificado
+    const tbsCertificate = cert.asn1.children[0];
+    const issuer = tbsCertificate.children.find(child => child.tagClass === forge.asn1.Class.UNIVERSAL && child.type === forge.asn1.Type.SEQUENCE); // Simplificación
+    const serialNumber = tbsCertificate.children.find(child => child.tagClass === forge.asn1.Class.UNIVERSAL && child.type === forge.asn1.Type.INTEGER);
+
     // 4. Construir estructura Completa (ContentInfo -> SignedData)
     // Esta estructura sigue estrictamente el RFC 2315
     const pkcs7 = forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
@@ -102,8 +117,8 @@ function createCMS(tra, certPem, keyPem) {
                     forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.INTEGER, false, forge.util.hexToBytes('01')),
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
-                            cert.asn1.children[0].children[3], // Issuer
-                            cert.asn1.children[0].children[1]  // SerialNumber
+                            cert.asn1.children[0].children[3] || issuer, // Issuer fallback
+                            cert.asn1.children[0].children[1] || serialNumber  // SerialNumber fallback
                         ]),
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
                             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('2.16.840.1.101.3.4.2.1').getBytes()),
