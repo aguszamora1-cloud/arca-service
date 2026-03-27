@@ -121,4 +121,7 @@ app.post('/facturar', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`ARCA Microservice running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 ARCA Microservice is now running!`);
+    console.log(`📡 Listening on: http://0.0.0.0:${PORT}`);
+});
