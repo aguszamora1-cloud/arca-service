@@ -73,7 +73,7 @@ app.post('/facturar', async (req, res) => {
             CUIT: parseInt(String(cuit).replace(/-/g, '')),
             cert: certPath,
             key: keyPath,
-            production: production === true
+            production: true
         });
 
         // 2. Inicializar SDK
@@ -81,11 +81,11 @@ app.post('/facturar', async (req, res) => {
             CUIT: parseInt(String(cuit).replace(/-/g, '')),
             cert: certPath,
             key: keyPath,
-            production: production === true,
+            production: true, // Siempre producción segun solicitud
             res_folder: resFolder
         });
 
-        console.log(`🚀 Solicitud iniciada (Ambiente: ${production ? 'PRODUCCION' : 'HOMOLOGACION'})`);
+        console.log(`🚀 Solicitud iniciada (Ambiente: PRODUCCION)`);
 
         // 3. Obtener ultimo numero autorizado
         const lastVoucher = await afip.ElectronicBilling.getLastVoucher(ptoVta, tipoComprobante);
