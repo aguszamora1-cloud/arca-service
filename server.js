@@ -1,8 +1,10 @@
+console.log('VERSION: axios-v2-' + new Date().toISOString());
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const soap = require('soap');
+const axios = require('axios');
+const xml2js = require('xml2js');
 const forge = require('node-forge');
 const moment = require('moment');
 
@@ -12,9 +14,16 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
-// Configuración de URLs AFIP (Producción por defecto según solicitud)
-const URL_WSAA = 'https://wsaa.afip.gob.ar/ws/services/LoginCms?wsdl';
-const URL_WSFE = 'https://servicios1.afip.gob.ar/wsfev1/service.asmx?WSDL';
+// Configuración de URLs AFIP (Producción)
+const URL_WSAA = 'https://wsaa.afip.gob.ar/ws/services/LoginCms';
+const URL_WSFE = 'https://servicios1.afip.gob.ar/wsfev1/service.asmx';
+
+// Parser de XML a JS
+const xmlParser = new xml2js.Parser({ 
+    explicitArray: false, 
+    ignoreAttrs: true,
+    tagNameProcessors: [xml2js.processors.stripPrefix] 
+});
 
 // Cache simple para evitar LoginCMS en cada request (AFIP tiene límites)
 let authCache = {
@@ -37,67 +46,42 @@ function dateToUtcTime(date) {
 
 function normalizePem(pem) {
     if (!pem) return '';
-    
-    // Extraer tipo (CERTIFICATE, PRIVATE KEY, etc)
     const typeMatch = pem.match(/-----BEGIN ([^-]+)-----/);
     if (!typeMatch) return pem;
-    
     const type = typeMatch[1];
-    
-    // Extraer todo el contenido entre los marcadores, 
-    // limpiando cualquier espacio, \n real o escapado
     const content = pem
         .replace(/-----BEGIN [^-]+-----/, '')
         .replace(/-----END [^-]+-----/, '')
         .replace(/\\n/g, '')
         .replace(/\s/g, '');
-    
-    // Reconstruir con saltos de línea reales cada 64 chars (estándar RFC)
     const wrapped = content.match(/.{1,64}/g).join('\n');
-    
     return `-----BEGIN ${type}-----\n${wrapped}\n-----END ${type}-----\n`;
 }
 
-/**
- * Genera el CMS (PKCS#7) firmado manualmente para evitar problemas de orden en AFIP.
- * Reemplaza a forge.pkcs7.createSignedData() según requerimiento.
- */
 function createCMS(tra, certPem, keyPem) {
-    console.log('📬 Diagnosis Cert PEM:', {
-        length: certPem?.length,
-        prefix: certPem?.substring(0, 50).replace(/\n/g, ' ')
-    });
-
     const normalizedCert = normalizePem(certPem);
     const normalizedKey = normalizePem(keyPem);
-    
     const cert = forge.pki.certificateFromPem(normalizedCert);
     const privateKey = forge.pki.privateKeyFromPem(normalizedKey);
 
-    // 1. Digest del XML
     const md = forge.md.sha256.create();
     md.update(tra, 'utf8');
     const digest = md.digest().getBytes();
 
-    // 2. Authenticated Attributes (ASN.1)
-    // El orden de los OIDs es CRÍTICO para AFIP (Java backend)
     const signingTime = new Date();
     const attrs = forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, [
-        // Content Type
         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.9.3').getBytes()),
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, [
                 forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.7.1').getBytes())
             ])
         ]),
-        // Message Digest
         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.9.4').getBytes()),
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, [
                 forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OCTETSTRING, false, digest)
             ])
         ]),
-        // Signing Time
         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.9.5').getBytes()),
             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, [
@@ -106,17 +90,13 @@ function createCMS(tra, certPem, keyPem) {
         ])
     ]);
 
-    // 3. Firmar Atributos
     const bytes = forge.asn1.toDer(attrs).getBytes();
     const signature = privateKey.sign(forge.md.sha256.create().update(bytes));
 
-    // Seguridad para extraer issuer y serialNumber del certificado
-    const tbsCertificate = cert.asn1.children[0];
-    const issuer = tbsCertificate.children.find(child => child.tagClass === forge.asn1.Class.UNIVERSAL && child.type === forge.asn1.Type.SEQUENCE); // Simplificación
+    const tbsCertificate = cert?.asn1?.children?.[0];
+    const issuer = tbsCertificate.children.find(child => child.tagClass === forge.asn1.Class.UNIVERSAL && child.type === forge.asn1.Type.SEQUENCE);
     const serialNumber = tbsCertificate.children.find(child => child.tagClass === forge.asn1.Class.UNIVERSAL && child.type === forge.asn1.Type.INTEGER);
 
-    // 4. Construir estructura Completa (ContentInfo -> SignedData)
-    // Esta estructura sigue estrictamente el RFC 2315
     const pkcs7 = forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.7.2').getBytes()),
         forge.asn1.create(forge.asn1.Class.CONTEXT_SPECIFIC, 0, true, [
@@ -138,14 +118,14 @@ function createCMS(tra, certPem, keyPem) {
                     forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.INTEGER, false, forge.util.hexToBytes('01')),
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
-                            cert.asn1.children[0].children[3] || issuer, // Issuer fallback
-                            cert.asn1.children[0].children[1] || serialNumber  // SerialNumber fallback
+                            cert?.asn1?.children?.[0]?.children?.[3] || issuer,
+                            cert?.asn1?.children?.[0]?.children?.[1] || serialNumber 
                         ]),
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
                             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('2.16.840.1.101.3.4.2.1').getBytes()),
                             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.NULL, false, '')
                         ]),
-                        forge.asn1.create(forge.asn1.Class.CONTEXT_SPECIFIC, 0, true, attrs.children),
+                        forge.asn1.create(forge.asn1.Class.CONTEXT_SPECIFIC, 0, true, attrs.children || []),
                         forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SEQUENCE, true, [
                             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.OID, false, forge.asn1.oidToDer('1.2.840.113549.1.1.1').getBytes()),
                             forge.asn1.create(forge.asn1.Class.UNIVERSAL, forge.asn1.Type.NULL, false, '')
@@ -160,9 +140,6 @@ function createCMS(tra, certPem, keyPem) {
     return forge.util.encode64(forge.asn1.toDer(pkcs7).getBytes());
 }
 
-/**
- * Obtener Token y Sign de WSAA
- */
 async function getAuth(certPem, keyPem, cuit) {
     if (authCache.token && authCache.sign && authCache.expiration > new Date() && authCache.cuit === cuit) {
         return authCache;
@@ -181,125 +158,161 @@ async function getAuth(certPem, keyPem, cuit) {
 </loginTicketRequest>`;
 
     const cms = createCMS(tra, certPem, keyPem);
-    const client = await soap.createClientAsync(URL_WSAA);
-    const [result] = await client.loginCmsAsync({ in0: cms });
 
-    const loginTicketResponse = result.loginCmsReturn;
-    const token = loginTicketResponse.match(/<token>([^<]+)<\/token>/)[1];
-    const sign = loginTicketResponse.match(/<sign>([^<]+)<\/sign>/)[1];
-    const expiration = loginTicketResponse.match(/<expirationTime>([^<]+)<\/expirationTime>/)[1];
+    const wsaaBody = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov.ar">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <wsaa:loginCms>
+      <wsaa:in0>${cms}</wsaa:in0>
+    </wsaa:loginCms>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+    console.log('📡 Solicitando Token a WSAA (vía Axios)...');
+    const response = await axios.post(URL_WSAA, wsaaBody, {
+        headers: { 'Content-Type': 'text/xml;charset=UTF-8', 'SOAPAction': '""' },
+        timeout: 30000
+    });
+
+    const parsed = await xmlParser.parseStringPromise(response.data);
+    const loginReturn = parsed.Envelope.Body.loginCmsResponse.loginCmsReturn;
+    
+    const tokenMatch = loginReturn.match(/<token>([^<]+)<\/token>/);
+    const signMatch = loginReturn.match(/<sign>([^<]+)<\/sign>/);
+    const expirationMatch = loginReturn.match(/<expirationTime>([^<]+)<\/expirationTime>/);
+
+    if (!tokenMatch || !signMatch || !expirationMatch) {
+        throw new Error('Respuesta de WSAA malformada');
+    }
 
     authCache = {
-        token,
-        sign,
-        expiration: new Date(expiration),
-        cuit
+        token: tokenMatch[1],
+        sign: signMatch[1],
+        expiration: new Date(expirationMatch[1]),
+        cuit: cuit
     };
 
     return authCache;
 }
 
-app.get('/', (req, res) => res.send('ARCA Stable-SOAP Service Online 🚀'));
+app.get('/', (req, res) => res.send('ARCA Axios-SOAP Service Online 🚀'));
 
 app.post('/facturar', async (req, res) => {
     try {
         const { cuit, certificate, privateKey, tipoComprobante, ptoVta, concepto, docTipo, docNro, total } = req.body;
 
         if (!cuit || !certificate || !privateKey) {
-            return res.status(400).json({ success: false, error: 'Credenciales incompletas (requiere cuit, certificate y privateKey)' });
+            return res.status(400).json({ success: false, error: 'Credenciales incompletas' });
         }
 
-        // 1. Obtener Autenticación
-        console.log(`📡 Solicitando acceso a WSAA para CUIT: ${cuit}`);
         const auth = await getAuth(certificate, privateKey, cuit);
 
-        // 2. Conectar a WSFE
-        const client = await soap.createClientAsync(URL_WSFE);
+        // 1. FECompUltimoAutorizado
+        const ultimoBody = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body>
+    <ar:FECompUltimoAutorizado>
+      <ar:Auth>
+        <ar:Token>${auth.token}</ar:Token>
+        <ar:Sign>${auth.sign}</ar:Sign>
+        <ar:Cuit>${cuit}</ar:Cuit>
+      </ar:Auth>
+      <ar:PtoVta>${ptoVta}</ar:PtoVta>
+      <ar:CbteTipo>${tipoComprobante}</ar:CbteTipo>
+    </ar:FECompUltimoAutorizado>
+  </soap:Body>
+</soap:Envelope>`;
 
-        // 3. Consultar Último Comprobante
-        const feCompUltimoAutorizadoRequest = {
-            Auth: {
-                Token: auth.token,
-                Sign: auth.sign,
-                Cuit: cuit
-            },
-            PtoVta: ptoVta,
-            CbteTipo: tipoComprobante
-        };
+        console.log(`📡 Consultando último comprobante para PtoVta ${ptoVta}...`);
+        const resUltimo = await axios.post(URL_WSFE, ultimoBody, {
+            headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://ar.gov.afip.dif.FEV1/FECompUltimoAutorizado' }
+        });
 
-        const [ultimoResult] = await client.FECompUltimoAutorizadoAsync(feCompUltimoAutorizadoRequest);
-        const lastVoucher = ultimoResult.FECompUltimoAutorizadoResult.CbteNro;
-        const nextVoucher = lastVoucher + 1;
+        const parsedUltimo = await xmlParser.parseStringPromise(resUltimo.data);
+        const resultUltimo = parsedUltimo.Envelope.Body.FECompUltimoAutorizadoResponse.FECompUltimoAutorizadoResult;
+        
+        if (resultUltimo.Errors) {
+            throw new Error(resultUltimo.Errors.Err.Msg || 'Error al consultar último comprobante');
+        }
 
-        // 4. Calcular importes
+        const nextVoucher = parseInt(resultUltimo.CbteNro) + 1;
+
+        // 2. FECAESolicitar
         const totalAmount = parseFloat(total || 0);
         const isMonotributo = parseInt(tipoComprobante) === 11;
         const impNeto = isMonotributo ? totalAmount : parseFloat((totalAmount / 1.21).toFixed(2));
         const impIVA = isMonotributo ? 0 : parseFloat((totalAmount - impNeto).toFixed(2));
         const date = moment().format('YYYYMMDD');
 
-        // 5. Preparar Voucher para Solicitud
-        const request = {
-            Auth: {
-                Token: auth.token,
-                Sign: auth.sign,
-                Cuit: cuit
-            },
-            FeCAEReq: {
-                FeCabReq: {
-                    CantReg: 1,
-                    PtoVta: ptoVta,
-                    CbteTipo: tipoComprobante
-                },
-                FeDetReq: {
-                    FECAEDetRequest: {
-                        Concepto: concepto || 1,
-                        DocTipo: docTipo || 96,
-                        DocNro: docNro || 0,
-                        CbteDesde: nextVoucher,
-                        CbteHasta: nextVoucher,
-                        CbteFch: date,
-                        ImpTotal: totalAmount,
-                        ImpTotConc: 0,
-                        ImpNeto: impNeto,
-                        ImpOpEx: 0,
-                        ImpIVA: impIVA,
-                        ImpTrib: 0,
-                        MonId: 'PES',
-                        MonCotiz: 1
-                    }
-                }
-            }
-        };
-
+        let ivaXml = '';
         if (!isMonotributo) {
-            request.FeCAEReq.FeDetReq.FECAEDetRequest.Iva = {
-                AlicIva: [{
-                    Id: 5, // 21%
-                    BaseImp: impNeto,
-                    Importe: impIVA
-                }]
-            };
+            ivaXml = `<ar:Iva>
+          <ar:AlicIva>
+            <ar:Id>5</ar:Id>
+            <ar:BaseImp>${impNeto}</ar:BaseImp>
+            <ar:Importe>${impIVA}</ar:Importe>
+          </ar:AlicIva>
+        </ar:Iva>`;
         }
 
-        // 6. Enviar a AFIP
+        const solicitarBody = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body>
+    <ar:FECAESolicitar>
+      <ar:Auth>
+        <ar:Token>${auth.token}</ar:Token>
+        <ar:Sign>${auth.sign}</ar:Sign>
+        <ar:Cuit>${cuit}</ar:Cuit>
+      </ar:Auth>
+      <ar:FeCAEReq>
+        <ar:FeCabReq>
+          <ar:CantReg>1</ar:CantReg>
+          <ar:PtoVta>${ptoVta}</ar:PtoVta>
+          <ar:CbteTipo>${tipoComprobante}</ar:CbteTipo>
+        </ar:FeCabReq>
+        <ar:FeDetReq>
+          <ar:FECAEDetRequest>
+            <ar:Concepto>${concepto || 1}</ar:Concepto>
+            <ar:DocTipo>${docTipo || 96}</ar:DocTipo>
+            <ar:DocNro>${docNro || 0}</ar:DocNro>
+            <ar:CbteDesde>${nextVoucher}</ar:CbteDesde>
+            <ar:CbteHasta>${nextVoucher}</ar:CbteHasta>
+            <ar:CbteFch>${date}</ar:CbteFch>
+            <ar:ImpTotal>${totalAmount}</ar:ImpTotal>
+            <ar:ImpTotConc>0</ar:ImpTotConc>
+            <ar:ImpNeto>${impNeto}</ar:ImpNeto>
+            <ar:ImpOpEx>0</ar:ImpOpEx>
+            <ar:ImpIVA>${impIVA}</ar:ImpIVA>
+            <ar:ImpTrib>0</ar:ImpTrib>
+            <ar:MonId>PES</ar:MonId>
+            <ar:MonCotiz>1</ar:MonCotiz>
+            ${ivaXml}
+          </ar:FECAEDetRequest>
+        </ar:FeDetReq>
+      </ar:FeCAEReq>
+    </ar:FECAESolicitar>
+  </soap:Body>
+</soap:Envelope>`;
+
         console.log(`🚀 Solicitando CAE para Factura ${nextVoucher}...`);
-        const [result] = await client.FECAESolicitarAsync(request);
-        const data = result.FECAESolicitarResult;
+        const resSolicitar = await axios.post(URL_WSFE, solicitarBody, {
+            headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://ar.gov.afip.dif.FEV1/FECAESolicitar' }
+        });
 
-        if (data.Errors) {
-            const errorMsg = Array.isArray(data.Errors.Err) ? data.Errors.Err[0].Msg : data.Errors.Err.Msg;
-            throw new Error(errorMsg);
+        const parsedSolicitar = await xmlParser.parseStringPromise(resSolicitar.data);
+        const resultSolicitar = parsedSolicitar.Envelope.Body.FECAESolicitarResponse.FECAESolicitarResult;
+
+        if (resultSolicitar.Errors) {
+            const msg = resultSolicitar.Errors.Err.Msg || 'Error de AFIP';
+            throw new Error(msg);
         }
 
-        const details = data.FeDetResp.FECAEDetResponse[0] || data.FeDetResp.FECAEDetResponse;
-
+        const details = resultSolicitar.FeDetResp.FECAEDetResponse;
         if (details.Resultado === 'R') {
-            const obsMsg = details.Observaciones.Obs[0]?.Msg || details.Observaciones.Obs.Msg;
-            throw new Error(`Rechazado por AFIP: ${obsMsg}`);
+            const obs = details.Observaciones?.Obs?.Msg || 'Rechazo sin observaciones';
+            throw new Error(`AFIP Rechazó: ${obs}`);
         }
-
-        console.log(`✅ EXITO: Comprobante ${nextVoucher} autorizado. CAE: ${details.CAE}`);
 
         res.json({
             success: true,
@@ -309,11 +322,9 @@ app.post('/facturar', async (req, res) => {
         });
 
     } catch (err) {
-        console.error('💥 ERROR ESTABLE-SOAP:', err.message);
+        console.error('💥 ERROR WSAA-AXIOS:', err.response?.data || err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 ARCA Stable-SOAP Microservice running on port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running on port ${PORT}`));
