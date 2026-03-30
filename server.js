@@ -22,6 +22,10 @@ function getArcaInstance() {
     const cert = process.env.AFIP_CERT;
     const key  = process.env.AFIP_KEY;
 
+    console.log('AFIP_CUIT:', process.env.AFIP_CUIT ? 'OK (' + process.env.AFIP_CUIT + ')' : 'VACÍO');
+    console.log('AFIP_CERT length:', process.env.AFIP_CERT ? process.env.AFIP_CERT.length : 'VACÍO');
+    console.log('AFIP_KEY length:', process.env.AFIP_KEY ? process.env.AFIP_KEY.length : 'VACÍO');
+
     if (!cuit || !cert || !key) {
         throw new Error(
             'Faltan variables de entorno: AFIP_CUIT, AFIP_CERT y/o AFIP_KEY no están definidas en Railway.'
