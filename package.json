@@ -1,13 +1,12 @@
 {
   "name": "arca-service",
-  "version": "2.0.0",
-  "main": "server.js",
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.0",
-    "@ramiidv/arca-facturacion": "latest",
-    "cors": "^2.8.5"
+    "@ramiidv/arca-facturacion": "^2.0.0"
   }
 }

@@ -85,10 +85,10 @@ router.post('/nota-debito', async (req, res) => {
     }
 });
 
-// GET /ultimo-comprobante
-router.get('/ultimo-comprobante', async (req, res) => {
+// POST /ultimo-comprobante
+router.post('/ultimo-comprobante', async (req, res) => {
     try {
-        const { cuit, cert, key, production, ptoVta, cbteTipo } = req.query;
+        const { cuit, cert, key, production, ptoVta, cbteTipo } = req.body;
         const arca = getArcaInstance({ cuit, cert, key, production });
         
         const ultimo = await arca.ultimoComprobante(Number(ptoVta), Number(cbteTipo));
@@ -99,10 +99,10 @@ router.get('/ultimo-comprobante', async (req, res) => {
     }
 });
 
-// GET /puntos-venta
-router.get('/puntos-venta', async (req, res) => {
+// POST /puntos-venta
+router.post('/puntos-venta', async (req, res) => {
     try {
-        const { cuit, cert, key, production } = req.query;
+        const { cuit, cert, key, production } = req.body;
         const arca = getArcaInstance({ cuit, cert, key, production });
         
         const puntosVenta = await arca.getPuntosVenta();
