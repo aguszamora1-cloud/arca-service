@@ -168,6 +168,22 @@ app.post('/arca', async (req, res) => {
         break;
       }
 
+      case 'puntos_venta': {
+        // Smoke test de credenciales: ejercita WSAA + WSFEv1 consultando el último
+        // comprobante de un PV/tipo conocido. Si el cert/key están mal, falla acá.
+        const ptoVta = Number(params.pto_vta || 1);
+        const cbteTipo = Number(params.cbte_tipo || CbteTipo.FACTURA_B);
+        const ultimo = await arca.ultimoComprobante(ptoVta, cbteTipo);
+        result = {
+          ok: true,
+          pto_vta: ptoVta,
+          cbte_tipo: cbteTipo,
+          ultimo_comprobante: ultimo,
+          msg: `WSAA + WSFE OK. Último comprobante PV ${ptoVta} tipo ${cbteTipo}: ${ultimo}`,
+        };
+        break;
+      }
+
       default:
         return res.status(400).json({ ok: false, error: `Acción desconocida: ${action}` });
     }
