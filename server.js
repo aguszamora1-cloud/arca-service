@@ -5,6 +5,54 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+
+// ----------------------------------------------------------------------------
+// Diagnóstico de cert/key
+// ----------------------------------------------------------------------------
+function verifyCertKeyPair(certPem, keyPem) {
+  try {
+    const certPub = crypto.createPublicKey({ key: certPem, format: 'pem' });
+    const keyPub = crypto.createPublicKey(crypto.createPrivateKey({ key: keyPem, format: 'pem' }));
+    const a = certPub.export({ format: 'der', type: 'spki' });
+    const b = keyPub.export({ format: 'der', type: 'spki' });
+    return Buffer.compare(a, b) === 0;
+  } catch {
+    return false;
+  }
+}
+
+function inspectCertSync(certPem) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inspect-'));
+  try {
+    const p = path.join(tmpDir, 'cert.pem');
+    fs.writeFileSync(p, certPem, 'utf8');
+    const out = execFileSync('openssl', ['x509', '-in', p, '-noout', '-subject', '-issuer', '-startdate', '-enddate', '-serial'], { encoding: 'utf8' });
+    return out.trim().replace(/\n/g, ' | ');
+  } catch (e) {
+    return `inspect failed: ${e.message}`;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Interceptor del fetch global para capturar body de errores HTTP de ARCA
+// ----------------------------------------------------------------------------
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async function patchedFetch(...args) {
+  const resp = await originalFetch(...args);
+  if (!resp.ok && (typeof args[0] === 'string' && args[0].includes('afip.gov.ar'))) {
+    const cloned = resp.clone();
+    const text = await cloned.text().catch(() => '');
+    const snippet = text.slice(0, 500).replace(/\s+/g, ' ');
+    console.log(`[fetch] ARCA HTTP ${resp.status} body: ${snippet}`);
+    // Wrap response so the SDK still gets to read .text()
+    const wrapped = new Response(text, { status: resp.status, statusText: `${resp.statusText} | body: ${snippet}`, headers: resp.headers });
+    return wrapped;
+  }
+  return resp;
+};
 
 // Monkey-patch: el signTRA original del SDK usa node-forge.pkcs7 que falla con
 // "Only 8, 16, 24, or 32 bits supported: N" para certs de ARCA cuando intenta
@@ -79,10 +127,25 @@ app.post('/arca', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Faltan campos: action, cert, key, cuit' });
     }
 
+    const cleanCert = cert.replace(/\\n/g, '\n');
+    const cleanKey = key.replace(/\\n/g, '\n');
+
+    // Verificar que cert y key son par criptográfico ANTES de gastar un round-trip
+    // a ARCA (que solo nos diría "HTTP 500" sin pista del por qué).
+    if (!verifyCertKeyPair(cleanCert, cleanKey)) {
+      const certInfo = inspectCertSync(cleanCert);
+      return res.status(400).json({
+        ok: false,
+        tipo: 'CertKeyMismatch',
+        error: `El certificado y la clave privada NO son par criptográfico. Esto pasa cuando regenerás el CSR después de subir el cert. Tenés que: 1) generar un CSR nuevo en ProCurva, 2) tramitarlo en AFIP, 3) bajar el .crt nuevo, 4) subirlo en ProCurva. Cert info: ${certInfo}`,
+      });
+    }
+    console.log(`[arca] cert info: ${inspectCertSync(cleanCert)}`);
+
     const arca = new Arca({
       cuit: Number(cuit),
-      cert: cert.replace(/\\n/g, '\n'),
-      key: key.replace(/\\n/g, '\n'),
+      cert: cleanCert,
+      key: cleanKey,
       production: production === true || production === 'true',
     });
 
