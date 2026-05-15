@@ -328,17 +328,22 @@ app.post('/arca', async (req, res) => {
       }
 
       case 'puntos_venta': {
-        // Smoke test de credenciales: ejercita WSAA + WSFEv1 consultando el último
-        // comprobante de un PV/tipo conocido. Si el cert/key están mal, falla acá.
-        const ptoVta = Number(params.pto_vta || 1);
-        const cbteTipo = Number(params.cbte_tipo || CbteTipo.FACTURA_B);
-        const ultimo = await arca.ultimoComprobante(ptoVta, cbteTipo);
+        // Llama directo a FEParamGetPtosVenta — AFIP devuelve la lista de PVs
+        // que ELLOS reconocen como habilitados para WSFE. Si el PV configurado
+        // no aparece acá, el problema está en la config de AFIP, no en el código.
+        const lista = await arca.getPuntosVenta();
+        const requested = Number(params.pto_vta) || null;
+        const found = Array.isArray(lista) ? lista.find(p => Number(p?.Nro ?? p?.nro) === requested) : null;
         result = {
           ok: true,
-          pto_vta: ptoVta,
-          cbte_tipo: cbteTipo,
-          ultimo_comprobante: ultimo,
-          msg: `WSAA + WSFE OK. Último comprobante PV ${ptoVta} tipo ${cbteTipo}: ${ultimo}`,
+          requested_pto_vta: requested,
+          found_in_afip: !!found,
+          puntos_venta_habilitados: lista,
+          msg: requested
+            ? (found
+              ? `WSAA + WSFE OK. PV ${requested} está habilitado en AFIP.`
+              : `WSAA OK pero AFIP NO tiene habilitado el PV ${requested}. PVs habilitados: ${JSON.stringify(lista)}`)
+            : `WSAA + WSFE OK. PVs habilitados según AFIP: ${JSON.stringify(lista)}`,
         };
         break;
       }
