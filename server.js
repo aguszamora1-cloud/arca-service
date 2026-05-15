@@ -103,6 +103,48 @@ WsaaClient.prototype.signTRA = function signTRAOpenssl(traXml) {
   }
 };
 
+// ----------------------------------------------------------------------------
+// Reemplazar performLogin del SDK por una versión que captura el body de
+// cualquier error de ARCA. Por defecto el SDK sólo reporta "HTTP 500" sin
+// pista del por qué.
+// ----------------------------------------------------------------------------
+const WSAA_NS = 'http://wsaa.view.sua.dvadac.desein.afip.gov';
+
+WsaaClient.prototype.performLogin = async function performLoginWithDiag(service) {
+  const traXml = this.createTRA(service);
+  const cms = this.signTRA(traXml);
+
+  const envelope = `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">` +
+    `<soapenv:Body>` +
+      `<loginCms xmlns="${WSAA_NS}"><in0>${cms}</in0></loginCms>` +
+    `</soapenv:Body>` +
+    `</soapenv:Envelope>`;
+
+  let resp, body;
+  try {
+    resp = await fetch(this.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
+      body: envelope,
+    });
+    body = await resp.text();
+  } catch (e) {
+    throw new Error(`WSAA fetch falló: ${e.message}`);
+  }
+
+  console.log(`[wsaa] endpoint=${this.endpoint} status=${resp.status} body_len=${body.length} body_preview=${body.slice(0, 600).replace(/\s+/g, ' ')}`);
+
+  if (!resp.ok) {
+    const snippet = body.slice(0, 800).replace(/\s+/g, ' ').trim();
+    throw new Error(`ARCA WSAA HTTP ${resp.status} ${resp.statusText} | body: ${snippet || '(vacío)'}`);
+  }
+
+  // Parsear y devolver al SDK con el shape esperado
+  const parsed = (await import('@ramiidv/arca-common/dist/soap-client.js')).parseXml(body);
+  return this.parseLoginResponse(parsed);
+};
+
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
