@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "express": "^4.18.0",
-    "@ramiidv/arca-facturacion": "^2.0.0"
+    "@ramiidv/arca-facturacion": "^2.0.0",
+    "@ramiidv/arca-common": "^0.1.0"
   }
 }

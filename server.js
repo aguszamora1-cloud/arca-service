@@ -1,5 +1,48 @@
 import express from 'express';
 import { Arca, CbteTipo, CondicionIva } from '@ramiidv/arca-facturacion';
+import { WsaaClient } from '@ramiidv/arca-common';
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+// Monkey-patch: el signTRA original del SDK usa node-forge.pkcs7 que falla con
+// "Only 8, 16, 24, or 32 bits supported: N" para certs de ARCA cuando intenta
+// codificar enteros ASN.1 mayores a 32 bits. Reemplazamos por openssl CLI
+// (mismo método que usan los ejemplos PHP oficiales de AFIP). Sincrónico para
+// no romper la firma de performLogin que llama signTRA sin await.
+WsaaClient.prototype.signTRA = function signTRAOpenssl(traXml) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsaa-'));
+  try {
+    const traPath = path.join(tmpDir, 'tra.xml');
+    const certPath = path.join(tmpDir, 'cert.pem');
+    const keyPath = path.join(tmpDir, 'key.pem');
+    const cmsPath = path.join(tmpDir, 'tra.cms');
+
+    fs.writeFileSync(traPath, traXml, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(certPath, this.cert, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(keyPath, this.key, { encoding: 'utf8', mode: 0o600 });
+
+    execFileSync(
+      'openssl',
+      [
+        'smime', '-sign',
+        '-in', traPath,
+        '-out', cmsPath,
+        '-outform', 'DER',
+        '-inkey', keyPath,
+        '-signer', certPath,
+        '-nodetach',
+        '-nosmimecap',
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    return fs.readFileSync(cmsPath).toString('base64');
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+};
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
