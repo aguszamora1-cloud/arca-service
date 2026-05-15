@@ -23,20 +23,31 @@ WsaaClient.prototype.signTRA = function signTRAOpenssl(traXml) {
     fs.writeFileSync(certPath, this.cert, { encoding: 'utf8', mode: 0o600 });
     fs.writeFileSync(keyPath, this.key, { encoding: 'utf8', mode: 0o600 });
 
-    execFileSync(
-      'openssl',
-      [
-        'smime', '-sign',
-        '-in', traPath,
-        '-out', cmsPath,
-        '-outform', 'DER',
-        '-inkey', keyPath,
-        '-signer', certPath,
-        '-nodetach',
-        '-nosmimecap',
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
-    );
+    // -binary: NO traducir LF<->CRLF en el contenido antes de firmar.
+    //   Sin esto, openssl normaliza newlines y la firma se computa contra
+    //   un contenido distinto al original, así ARCA rechaza con HTTP 500.
+    // Capturamos stderr para que cualquier error futuro venga con detalle.
+    try {
+      execFileSync(
+        'openssl',
+        [
+          'smime', '-sign',
+          '-in', traPath,
+          '-out', cmsPath,
+          '-outform', 'DER',
+          '-inkey', keyPath,
+          '-signer', certPath,
+          '-nodetach',
+          '-nosmimecap',
+          '-binary',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+    } catch (e) {
+      const stderr = e?.stderr ? Buffer.from(e.stderr).toString('utf8') : '';
+      const stdout = e?.stdout ? Buffer.from(e.stdout).toString('utf8') : '';
+      throw new Error(`openssl smime failed: ${e.message} | stderr: ${stderr.trim()} | stdout: ${stdout.trim()}`);
+    }
 
     return fs.readFileSync(cmsPath).toString('base64');
   } finally {
