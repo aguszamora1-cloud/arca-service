@@ -1,6 +1,6 @@
 import express from 'express';
 import { Arca, CbteTipo, CondicionIva } from '@ramiidv/arca-facturacion';
-import { WsaaClient } from '@ramiidv/arca-common';
+import { WsaaClient, parseXml } from '@ramiidv/arca-common';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -141,7 +141,7 @@ WsaaClient.prototype.performLogin = async function performLoginWithDiag(service)
   }
 
   // Parsear y devolver al SDK con el shape esperado
-  const parsed = (await import('@ramiidv/arca-common/dist/soap-client.js')).parseXml(body);
+  const parsed = parseXml(body);
   return this.parseLoginResponse(parsed);
 };
 
